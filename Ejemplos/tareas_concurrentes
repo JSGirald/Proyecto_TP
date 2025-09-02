@@ -1,0 +1,99 @@
+#include <SPI.h>
+#include <SD.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include "AudioTools.h"
+#include "AudioTools/AudioLibs/AudioBoardStream.h"
+#include "AudioTools/AudioCodecs/CodecMP3Helix.h"
+
+// Tu código de configuración de audio y WiFi aquí...
+const char* ap_ssid = "Control_1";
+const char* ap_pass = "123456789";
+WebServer servidor(80);
+
+const int chipSelect=PIN_AUDIO_KIT_SD_CARD_CS;
+AudioBoardStream i2s(AudioKitEs8388V1);
+// ... y demás variables globales
+EncodedAudioStream decoder(&i2s, new MP3DecoderHelix()); // Decoding stream
+StreamCopy copier;
+File audioFile;
+
+
+// Tarea 1: Servidor Web
+// Se ejecutará en el Core 0 (el core de comunicación)
+void ServidorWebTask(void* parameter) {
+  servidor.on("/", []() {
+    String html_home = "<h1>Servidor Web funcionando en Core 0</h1>";
+    servidor.send(200, "text/html", html_home);
+  });
+  servidor.begin();
+
+  // Bucle infinito de la tarea
+  for (;;) {
+    servidor.handleClient();
+    vTaskDelay(10 / portTICK_PERIOD_MS); // Pequeño delay para ceder el procesador
+  }
+}
+
+// Tarea 2: Reproducción de Audio
+// Se ejecutará en el Core 1 (el core de las operaciones en segundo plano)
+void AudioTask(void* parameter) {
+  // Tu código de setup de audio aquí (SD, i2s, decoder)
+  auto config = i2s.defaultConfig(TX_MODE);
+  config.sd_active = true;
+  i2s.begin(config);
+
+  // setup file
+  SD.begin(chipSelect);
+  audioFile = SD.open("/terror-scream.mp3");
+
+  // setup I2S based on sampling rate provided by decoder
+  decoder.begin();
+
+  // begin copy
+  copier.begin(decoder, audioFile);
+  // Bucle infinito de la tarea
+  for (;;) {
+    if (!copier.copy()) {
+      // Si la copia terminó, detener la reproducción
+      stop();
+    }
+    // No se necesita vTaskDelay aquí ya que copier.copy() cede el procesador
+  }
+}
+
+// Configuración principal del programa
+void setup() {
+  Serial.begin(115200);
+
+  // Conectar a WiFi (puedes hacerlo en STA o SoftAP)
+  WiFi.softAP(ap_ssid, ap_pass);
+  Serial.print("IP del AP: ");
+  Serial.println(WiFi.softAPIP());
+
+  // Crear y lanzar la tarea del Servidor Web en el Core 0
+  xTaskCreatePinnedToCore(
+    ServidorWebTask,          // Nombre de la función de la tarea
+    "Servidor Web",           // Nombre descriptivo
+    10000,                    // Tamaño de la pila (bytes)
+    NULL,                     // Parámetros de la tarea
+    1,                        // Prioridad de la tarea (1 es baja, 0 es la más baja)
+    NULL,                     // Handle de la tarea (opcional)
+    0);                       // **Core en el que se ejecuta (0)**
+
+  // Crear y lanzar la tarea de Audio en el Core 1
+  xTaskCreatePinnedToCore(
+    AudioTask,
+    "Audio",
+    10000,
+    NULL,
+    1,
+    NULL,
+    1);                       // **Core en el que se ejecuta (1)**
+}
+
+// El loop() principal puede quedar vacío
+void loop() {
+  // Las tareas se ejecutan de forma independiente.
+  // No necesitas poner nada aquí.
+}
