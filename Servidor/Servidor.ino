@@ -1,26 +1,32 @@
-#include <SPI.h>
-#include <SD.h>
+// Librerías de wifi
 #include <WiFi.h>
 #include <WebServer.h>
+
+// AudioTools
 #include "AudioTools.h"
 #include "AudioTools/AudioLibs/AudioBoardStream.h"
+#include "AudioTools/Disk/AudioSourceSD.h" // o AudioSourceIdxSD.h
 #include "AudioTools/AudioCodecs/CodecMP3Helix.h"
 
 // Constantes
 const char* ap_ssid = "Control_1";
 const char* ap_pass = "123456789";
-const int chipSelect = PIN_AUDIO_KIT_SD_CARD_CS;
 const char* html PROGMEM = "<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"UTF-8\"><title>Principal</title><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><style>.enlaceboton{display:block;font-family:verdana,arial,sans-serif;font-size:10pt;font-weight:700;padding:8px;margin:8px;background-color:#ffc;color:#333;text-decoration:none;border:2px solid #666;text-align:center}.enlaceboton:hover{background-color:#7a5;color:#fff}</style></head><body><h1>Efectos:</h1>";
 const char* html_fin PROGMEM = "</body></html>";
+const int chipSelect = PIN_AUDIO_KIT_SD_CARD_CS;
+const char* raiz = "/"; // directorio raiz
+const char* ext = "mp3"; // 
 
 // ... y demás variables globales
 WebServer servidor(80);
-AudioBoardStream i2s(AudioKitEs8388V1);
-EncodedAudioStream decoder(&i2s, new MP3DecoderHelix());  // Decoding stream
-StreamCopy copier;
-File audioFile;
+AudioSourceSD fuente(raiz, ext, chipSelect);
+AudioBoardStream kit(AudioKitEs8388V1);
+MP3DecoderHelix decode;
+AudioPlayer player(fuente, kit, decode); // ****** objeto player ******
+
 QueueHandle_t colaAudio;  // Manejador de la cola de audios
 
+// Variables que almacenan el html base
 char botones[1024];  // concatenación de TODOS los botones (enlaces)
 // html de los botones indivisuales que representan cada efecto (enlace para realizar el GET)
 char boton[256] = "<a class=\"enlaceboton\" href=\"\">%s</a>";  // se insertarán los nombres
@@ -28,12 +34,14 @@ char boton[256] = "<a class=\"enlaceboton\" href=\"\">%s</a>";  // se insertará
 void manejadorHTML() {
   String nombre;
   nombre = servidor.arg("NOMBRE");
-  Serial.print("Argumento: ");
+  Serial.print("ManejadorHTML: " );
   Serial.println(nombre);
   if (nombre != "") {
     if (xQueueSend(colaAudio, &nombre, portMAX_DELAY) == pdPASS) {
-      servidor.send(200, "text/html", String(html) + String(botones) + String(html_fin));
-      Serial.println("Enviado: " + nombre);
+      Serial.println("Enviado cola: " + nombre);
+      // player.playPath(nombre.c_str());
+
+      // servidor.send(200, "text/html", String(html) + String(botones) + String(html_fin));
     } else {
       servidor.send(500, "text/html", "Error al enviar el nombre del archivo de sonido.");
     }
@@ -60,101 +68,56 @@ void ServidorWebTask(void* parameter) {
 // Tarea 2: Reproducción de Audio
 // Se ejecutará en el Core 1 (el core de las operaciones en segundo plano)
 void AudioTask(void* parameter) {
-  // Variable para guardar el nombre del archivo a reproducir
+  // Variable para guardar el nombre del archivo a reproducir ???
   String archivo;
-
-  // Tu código de setup de audio aquí (SD, i2s, decoder)
-  auto config = i2s.defaultConfig(TX_MODE);
+  // Código de setup de audio aquí 
+  auto config = kit.defaultConfig(TX_MODE);
   config.sd_active = true;
-  i2s.begin(config);
+  kit.begin(config);
 
-  // inicia la tarjeta SD
-  SD.begin(chipSelect);
-  audioFile = SD.open("/terror-scream.mp3");  // Seguramente esto ya no sea necesario aquí
+  fuente.begin();
+  long cuenta = fuente.size();
+  String lista[64];
+  char buffer[64];
 
-  // Lee directorio raiz
-  Serial.println("Encontrados " + String(lsRaiz()) + " elementos.");
+  for (int i = 0; i < cuenta; i++) {
+    fuente.selectStream(i);
+    Serial.println(fuente.toStr());
 
-  // setup I2S based on sampling rate provided by decoder
-  decoder.begin();
+    sprintf(buffer, fuente.toStr());
+    lista[cuenta] = buffer;
+    sprintf(boton, "<a class=\"enlaceboton\" href=\"http://192.168.4.1\?NOMBRE=%s\">%s</a>", fuente.toStr(), fuente.toStr());
+    // Serial.println(boton);
+    sprintf(botones + strlen(botones), boton);
+  }
 
-  // begin copy
-  copier.begin(decoder, audioFile);
+  // configuración de los botones de la placa
+  //kit.addDefaultActions();
+  //kit.addAction(kit.getKey(1), startStop);
+  //kit.addAction(kit.getKey(4), next);
+  //kit.addAction(kit.getKey(3), previous);
 
-  //   if (!copier.copy()) {
-  //   // Si la copia terminó, detener la reproducción
-  //     stop();
-  //   }
+  // setup player
+  player.setVolume(0.75);
+  player.begin();
+  player.setAutoNext(false);
+
+
+  // player.playPath("/terror.mp3");
+  // player.playPath("/terror-scream.mp3");
 
   // Bucle infinito de la tarea
   for (;;) {
-
+    //player.copy();
+    //kit.processActions();
     if (xQueueReceive(colaAudio, &archivo, portMAX_DELAY) == pdPASS) {
-      // archivo = "/" + archivo;
-      // Serial.print("Nombre de archivo recibido: ");
-      // Serial.println(archivo);
-      // File audio = SD.open(archivo.c_str());
-
-      // if (audio) {
-      //   i2s.begin();
-      //   // copier.begin(audio, i2s);
-      //   copier.begin(decoder, audio);
-      //   if (copier.copy()) {
-      //     Serial.print("|>");
-      //   } else {
-      //     copier.end();
-      //     audio.close();
-      //     Serial.println("\nReproducción terminada ...");
-      //   }
-      // } else {
-      //   Serial.println("Error, archivo no encontrado ...");
-      // }
+      //if (!player.isActive()) {
+        Serial.print("Recibido: ");
+        Serial.println(archivo);
+      //}
+        player.playPath(archivo.c_str());
     }
-
-    // if (!copier.copy()) {
-    // // Si la copia terminó, detener la reproducción
-    //   stop();
-    // }
-    if (!copier.copy()) {
-    // Si la copia terminó, detener la reproducción
-      stop();
-    }
-
-
-
   }
-  // No se necesita vTaskDelay aquí ya que copier.copy() cede el procesador
-}
-
-uint8_t lsRaiz() {
-  Serial.println("Archivos del directorio raíz ...");
-  char buffer[64];   // espacio para guardar el texto
-  String lista[64];  // lista de nombres de archivos
-  uint8_t contador = 0;
-
-  // Abrir directorio
-  File raiz = SD.open("/");
-  if (!raiz) {
-    Serial.println("No ha sido posible abrir el directorio raíz ...");
-    return contador;
-  }
-
-  // Iterar
-  File entrada = raiz.openNextFile();
-  while (entrada) {
-    if (!entrada.isDirectory()) {
-      sprintf(buffer, entrada.name());
-      lista[contador] = buffer;
-      sprintf(boton, "<a class=\"enlaceboton\" href=\"http://192.168.4.1\?NOMBRE=%s\">%s</a>", entrada.name(), entrada.name());
-      Serial.println(boton);
-      sprintf(botones + strlen(botones), boton);
-      contador++;
-    }
-    entrada = raiz.openNextFile();
-  }
-  Serial.println("------");
-  Serial.println(botones);
-  return contador;
 }
 
 // Configuración principal del programa
@@ -167,10 +130,12 @@ void setup() {
   Serial.println(WiFi.softAPIP());
 
   // Crear la cola
-  colaAudio = xQueueCreate(5, sizeof(String));
+  colaAudio = xQueueCreate(1, sizeof(String));
   if (colaAudio == NULL) {
     Serial.println("Error, no se ha podido crear la cola de audio ...");
   }
+
+  //fuente.begin();
 
   // Crear y lanzar la tarea del Servidor Web en el Core 0
   xTaskCreatePinnedToCore(
@@ -188,7 +153,7 @@ void setup() {
     "Audio",
     10000,
     NULL,
-    1,
+    5,
     NULL,
     1);  // **Core en el que se ejecuta (1)**
 }
@@ -197,4 +162,6 @@ void setup() {
 void loop() {
   // Las tareas se ejecutan de forma independiente.
   // No necesitas poner nada aquí.
+  vTaskDelay(1000 / portTICK_PERIOD_MS);
 }
+
