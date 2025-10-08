@@ -8,6 +8,9 @@
 #include "AudioTools/Disk/AudioSourceSD.h" // o AudioSourceIdxSD.h
 #include "AudioTools/AudioCodecs/CodecMP3Helix.h"
 
+// La cola debe usar un array char en lugar de un objeto String
+#define MAX_FILENAME_LEN 64 // macro con la longitud máxima del nombre de archivo
+
 // Constantes
 const char* ap_ssid = "Control_1";
 const char* ap_pass = "123456789";
@@ -23,6 +26,7 @@ AudioSourceSD fuente(raiz, ext, chipSelect);
 AudioBoardStream kit(AudioKitEs8388V1);
 MP3DecoderHelix decode;
 AudioPlayer player(fuente, kit, decode); // ****** objeto player ******
+String efectos = ""; // Cadena en la que se van a leer los nombres de archivo
 
 QueueHandle_t colaAudio;  // Manejador de la cola de audios
 
@@ -32,27 +36,45 @@ char botones[1024];  // concatenación de TODOS los botones (enlaces)
 char boton[256] = "<a class=\"enlaceboton\" href=\"\">%s</a>";  // se insertarán los nombres
 
 void manejadorHTML() {
-  String nombre;
-  nombre = servidor.arg("NOMBRE");
+  String nombre_str; // usar variable auxiliar tipo String dentro de la función
+
+  nombre_str = servidor.arg("NOMBRE");
   Serial.print("ManejadorHTML: " );
-  Serial.println(nombre);
-  if (nombre != "") {
+  Serial.println(nombre_str);
+  
+  if (nombre_str != "") {
+    char nombre[MAX_FILENAME_LEN]; // crea una variable tipo array char para guardar el nombre 
+    strncpy(nombre, nombre_str.c_str(), sizeof(nombre)); // copia nombre
+    nombre[sizeof(nombre) - 1] = '\0'; // la cadena debe terminar en caracter nulo
+
     if (xQueueSend(colaAudio, &nombre, portMAX_DELAY) == pdPASS) {
-      Serial.println("Enviado cola: " + nombre);
+      Serial.println("Enviado cola: " + nombre_str);
       // player.playPath(nombre.c_str());
 
       // servidor.send(200, "text/html", String(html) + String(botones) + String(html_fin));
     } else {
       servidor.send(500, "text/html", "Error al enviar el nombre del archivo de sonido.");
+      return;
     }
   }
   servidor.send(200, "text/html", String(html) + String(botones) + String(html_fin));
+}
+
+void enviaEfectos() {
+  if (efectos != "") {
+    Serial.println("Recibido endpoint efectos");
+    Serial.println(efectos);
+    servidor.send(200, "text/plain", efectos);
+  }
 }
 
 // Tarea 1: Servidor Web
 // Se ejecutará en el Core 0 (el core de comunicación)
 void ServidorWebTask(void* parameter) {
   servidor.on("/", manejadorHTML);
+
+  servidor.on("/efectos", enviaEfectos); // ENDPOINT para leer los nombres de archivo
+
   // servidor.on("/", []() {
   //   servidor.send(200, "text/html", String(html) + String(botones) + String(html_fin));
   // });
@@ -69,7 +91,7 @@ void ServidorWebTask(void* parameter) {
 // Se ejecutará en el Core 1 (el core de las operaciones en segundo plano)
 void AudioTask(void* parameter) {
   // Variable para guardar el nombre del archivo a reproducir ???
-  String archivo;
+  char archivo[MAX_FILENAME_LEN];
   // Código de setup de audio aquí 
   auto config = kit.defaultConfig(TX_MODE);
   config.sd_active = true;
@@ -82,6 +104,7 @@ void AudioTask(void* parameter) {
 
   for (int i = 0; i < cuenta; i++) {
     fuente.selectStream(i);
+    Serial.print(i);
     Serial.println(fuente.toStr());
 
     sprintf(buffer, fuente.toStr());
@@ -89,8 +112,14 @@ void AudioTask(void* parameter) {
     sprintf(boton, "<a class=\"enlaceboton\" href=\"http://192.168.4.1\?NOMBRE=%s\">%s</a>", fuente.toStr(), fuente.toStr());
     // Serial.println(boton);
     sprintf(botones + strlen(botones), boton);
+    efectos += "\\\"" + String(fuente.toStr()) + "\\\"";
+    if ((i + 1) < cuenta) {
+      efectos += ",";
+    } else {
+      efectos = "\"[" + efectos + "]\"";
+    }
   }
-
+  Serial.println(efectos);
   // configuración de los botones de la placa
   //kit.addDefaultActions();
   //kit.addAction(kit.getKey(1), startStop);
@@ -115,7 +144,9 @@ void AudioTask(void* parameter) {
         Serial.print("Recibido: ");
         Serial.println(archivo);
       //}
-        player.playPath(archivo.c_str());
+        //player.playPath(archivo.c_str());
+        player.playPath(archivo);
+        //Serial.println(player.copy());
     }
   }
 }
@@ -130,7 +161,9 @@ void setup() {
   Serial.println(WiFi.softAPIP());
 
   // Crear la cola
-  colaAudio = xQueueCreate(1, sizeof(String));
+  // colaAudio = xQueueCreate(1, sizeof(String));
+  colaAudio = xQueueCreate(1, sizeof(char[MAX_FILENAME_LEN]));
+
   if (colaAudio == NULL) {
     Serial.println("Error, no se ha podido crear la cola de audio ...");
   }
