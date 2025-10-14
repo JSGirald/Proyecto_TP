@@ -15,6 +15,8 @@
 #include <WiFi.h> // Librería necesaria para la conectividad WiFi
 #include <HTTPClient.h>
 
+#include <ArduinoJson.h>
+
 // ----------------------------
 // Librerías Adicionales
 // ----------------------------
@@ -43,7 +45,7 @@ IPAddress IP_ESTATICA(192, 168, 4, 1); // Usada solo como referencia
 // ----------------------------
 XPT2046_Bitbang ts(XPT2046_MOSI, XPT2046_MISO, XPT2046_CLK, XPT2046_CS, 320, 240);
 TFT_eSPI tft = TFT_eSPI();
-TFT_eSPI_Button key[8]; // Array de botones con capacidad para 8
+TFT_eSPI_Button key[16]; // Array de botones con capacidad para 8
 
 // ----------------------------
 // VARIABLES DE ESTADO GLOBAL Y ENUMERACIÓN DE PANTALLAS
@@ -76,6 +78,8 @@ void controlar_menu();
 void controlar_luces();
 void controlar_sonido();
 
+StaticJsonDocument<512> lista_efectos;
+
 // ----------------------------
 // SETUP
 // ----------------------------
@@ -96,10 +100,39 @@ void setup() {
   establecer_conexion_inicial(); 
 
   // --- Leer la lista de archivos de sonido disponibles ---
-  enviar_peticion_efecto(0);
+  enviar_peticion_efecto();
   
   // Configura el font para la interfaz
   tft.setFreeFont(&FreeMonoBold18pt7b);
+}
+
+// ----------------------------
+// LOOP (Bucle Principal)
+// ----------------------------
+void loop() {
+    // 1. Seleccionar qué función de control ejecutar según el estado actual
+    switch(pantalla_actual) {
+        case PANTALLA_WIFI_STATUS:
+            controlar_wifi_status();
+            break;
+        case PANTALLA_MENU:
+            controlar_menu();
+            break;
+        case PANTALLA_LUCES:
+            controlar_luces();
+            break;
+        case PANTALLA_SONIDO:
+            controlar_sonido();
+            break;
+        default:
+            // Por defecto, intentar volver al menú si el estado es desconocido
+            pantalla_actual = PANTALLA_MENU;
+            inicializada = false;
+            break;
+    }
+    
+    // Pequeña pausa para evitar rebotes y mantener estabilidad
+    delay(50); 
 }
 
 // ----------------------------
@@ -147,10 +180,6 @@ void establecer_conexion_inicial() {
     inicializada = false; // Forzar el primer dibujo de la pantalla inicial
 }
 
-// ----------------------------
-// FUNCIONES DE CONTROL (Dibujo + Lógica de pulsación)
-// ----------------------------
-
 // Actualiza el texto de los botones de luz para reflejar su estado ON/OFF.
 void actualizar_texto_luz(uint8_t indice, bool estado) {
     // Los índices del botón son 1 (Luz 1) y 2 (Luz 2)
@@ -159,6 +188,10 @@ void actualizar_texto_luz(uint8_t indice, bool estado) {
         key[indice + 1].drawButton(false, nombres[indice]); 
     }
 }
+
+// ----------------------------
+// FUNCIONES DE CONTROL (Dibujo + Lógica de pulsación)
+// ----------------------------
 
 // PANTALLA 0: Estado WiFi (Controla la conexión)
 void controlar_wifi_status() {
@@ -294,7 +327,6 @@ void controlar_menu() {
     }
 }
 
-
 // PANTALLA 2: Control de Luces (ATRAS + Luz 1 + Luz 2)
 void controlar_luces() {
     // Definimos una altura para la barra de título/atras
@@ -389,17 +421,15 @@ void controlar_luces() {
 // PANTALLA 3: Control de Sonido (Nueva)
 void controlar_sonido() {
     const uint16_t ALTO_BARRA_ATRAS = 40;
-//
-//
 
     if (!inicializada) {
         tft.fillScreen(TFT_BLACK);
         tft.setFreeFont(&FreeMonoBold12pt7b);
         tft.setTextDatum(MC_DATUM); 
 
-        // Botón 0: ATRAZ al MENU (Barra Superior)
+        // Botón 0: ATRAS al MENU (Barra Superior)
         // Solo el botón de ATRAS está activo.
-        NUM_BOTONES_ACTIVOS = 1; 
+        NUM_BOTONES_ACTIVOS = 16; 
         
         key[0].initButton(&tft,
                           tft.width() / 2, 
@@ -413,11 +443,13 @@ void controlar_sonido() {
                           1);
         key[0].drawButton(false);
         
+        // Crear los botones de cada efecto
+
         // --- TEXTO MARCADOR DE POSICIÓN ---
         tft.setTextColor(TFT_YELLOW);
         tft.setFreeFont(&FreeSansBold9pt7b); 
-        tft.drawString("CONTROL DE SONIDO - VACÍO", tft.width() / 2, ALTO_BARRA_ATRAS + 50);
-        tft.drawString("Aquí irá la lista de pistas y controles.", tft.width() / 2, ALTO_BARRA_ATRAS + 80);
+        tft.drawString("CONTROL DE SONIDO - VACIO", tft.width() / 2, ALTO_BARRA_ATRAS + 50);
+        tft.drawString("Aqui ira la lista de pistas y controles.", tft.width() / 2, ALTO_BARRA_ATRAS + 80);
         tft.setFreeFont(&FreeMonoBold18pt7b);
         
         inicializada = true;
@@ -448,36 +480,9 @@ void controlar_sonido() {
 }
 
 // ----------------------------
-// LOOP (Bucle Principal)
+// Leer lista de archivos mp3 del servidor
 // ----------------------------
-void loop() {
-    // 1. Seleccionar qué función de control ejecutar según el estado actual
-    switch(pantalla_actual) {
-        case PANTALLA_WIFI_STATUS:
-            controlar_wifi_status();
-            break;
-        case PANTALLA_MENU:
-            controlar_menu();
-            break;
-        case PANTALLA_LUCES:
-            controlar_luces();
-            break;
-        case PANTALLA_SONIDO:
-            controlar_sonido();
-            break;
-        default:
-            // Por defecto, intentar volver al menú si el estado es desconocido
-            pantalla_actual = PANTALLA_MENU;
-            inicializada = false;
-            break;
-    }
-    
-    // Pequeña pausa para evitar rebotes y mantener estabilidad
-    delay(50); 
-}
-
-
-void enviar_peticion_efecto(uint8_t trackIndex) {
+void enviar_peticion_efecto() {
     // 1. Verificar el estado de la conexión WiFi
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("Error: No hay conexión WiFi para enviar la petición.");
@@ -485,20 +490,17 @@ void enviar_peticion_efecto(uint8_t trackIndex) {
     }
     
     // 2. Definir la URL completa del endpoint
-    // Endpoint base: http://192.168.4.1/efectos
     // String url = "http://" + IP_ESTATICA.toString() + "/efectos";
     String url = "http://192.168.4.1/efectos";
     
-    // 3. Agregar el parámetro 'track_index' a la consulta (Query Parameter)
-    // El servidor usará este valor para saber qué reproducir.
-    // String payload = "?track_index=" + String(trackIndex);
+    // 3. 
     String fullUrl = url ;//+ payload;
 
-    Serial.println(">>> Enviando petición GET a: " + fullUrl);
+    Serial.println(">>> Enviando petición GET a: " + url);
 
-    // 4. Inicializar y Configurar la petición
+    // 4. Inicializar y Configurar la petición, se puede incluir parámetros GET
     HTTPClient http;
-    http.begin(fullUrl); 
+    http.begin(url); 
 
     // 5. Ejecutar la petición GET
     int httpResponseCode = http.GET();
@@ -508,10 +510,32 @@ void enviar_peticion_efecto(uint8_t trackIndex) {
         // Código 200 (OK), 404 (No encontrado), 500 (Error de servidor), etc.
         Serial.printf("<<< Código HTTP recibido: %d\n", httpResponseCode);
         String response = http.getString();
+
+        response = response.substring(1, response.length() - 1); /// <<<< limpia " al principio y final"
+        response.replace("\\", ""); /// limpia '\'
+
         Serial.println("<<< Respuesta del servidor: " + response);
+        DeserializationError error = deserializeJson(lista_efectos, response);
+        if (error) { 
+            Serial.print("<<< Error en la deserializacion ... ");
+            Serial.println(error.f_str());
+            Serial.printf("<%s>", response); // envía la respuesta
+            return; 
+        }
+        // Imprime la lista en la consola serie usa const char* por seguridad
+        for (int k = 0; k < lista_efectos.size(); k++) {
+            const char* temp_char = lista_efectos[k].as<const char*>();
+            
+            if (temp_char != nullptr) {
+                String elem = String(temp_char);
+                Serial.println(elem);
+            } else {
+                Serial.println("<<< Puntero nulo ...");
+            }
+        }
     } else {
         // Manejo de errores de conexión o timeout
-        Serial.printf("<<< Error en la petición GET. Código: %s\n", http.errorToString(httpResponseCode).c_str());
+        Serial.printf("<<< Error en la petición GET. Código: %s ...\n", http.errorToString(httpResponseCode).c_str());
     }
 
     // 7. Finalizar y liberar recursos
