@@ -66,6 +66,10 @@ char nombres[2][20] = {"Luz 1", "Luz 2"};
 bool estado_botones[2] = {false, false}; // Estado interno ON/OFF de Luz 1 y Luz 2
 bool inicializada = false; // Flag para saber si la pantalla debe ser dibujada (solo una vez)
 
+StaticJsonDocument<512> lista_efectos;
+uint16_t num_efectos = 0;
+bool playing = true; // estado del botón play/pausa
+
 // ----------------------------
 // Prototipos de Funciones (Nombres en español)
 // ----------------------------
@@ -77,8 +81,6 @@ void controlar_wifi_status();
 void controlar_menu();
 void controlar_luces();
 void controlar_sonido();
-
-StaticJsonDocument<512> lista_efectos;
 
 // ----------------------------
 // SETUP
@@ -421,6 +423,7 @@ void controlar_luces() {
 // PANTALLA 3: Control de Sonido (Nueva)
 void controlar_sonido() {
     const uint16_t ALTO_BARRA_ATRAS = 40;
+    //bool en_pausa = true;
 
     if (!inicializada) {
         tft.fillScreen(TFT_BLACK);
@@ -429,7 +432,7 @@ void controlar_sonido() {
 
         // Botón 0: ATRAS al MENU (Barra Superior)
         // Solo el botón de ATRAS está activo.
-        NUM_BOTONES_ACTIVOS = 16; 
+        NUM_BOTONES_ACTIVOS = 16; // número máximo de botones
         
         key[0].initButton(&tft,
                           tft.width() / 2, 
@@ -443,14 +446,63 @@ void controlar_sonido() {
                           1);
         key[0].drawButton(false);
         
-        // Crear los botones de cada efecto
+        // Crear los botones de cada efecto de sonido
+        /*
+        StaticJsonDocument<512> lista_efectos;
+        uint16_t num_efectos = 0;
+        */
+        // Imprime la lista en la consola serie usa const char* por seguridad
+        num_efectos = lista_efectos.size();
+        for (int k = 0; k < lista_efectos.size(); k++) {
+            const char* temp_char = lista_efectos[k].as<const char*>();
+            char nombre[10];
+            strncpy(nombre, temp_char, 9);
+            nombre[9] = '\0';
+                        
+            if (temp_char != nullptr) {
+                Serial.println(String(lista_efectos[k])); // FIXME:
+                key[k + 1].initButton(&tft,
+                                tft.width() / 3, 
+                                k * 40 + (ALTO_BARRA_ATRAS + 20), 
+                                tft.width() * 2 / 3, 
+                                ALTO_BARRA_ATRAS, 
+                                TFT_DARKGREY, 
+                                TFT_GREEN, 
+                                TFT_BLACK, 
+                                nombre, 
+                                1);
+                key[k + 1].drawButton(false);
+            } else {
+                Serial.println("<<< Puntero nulo ...");
+            }
+        }
+        key[12].initButton(&tft, 
+                tft.width() * 5 / 6, 0 + (ALTO_BARRA_ATRAS + 20), 
+                tft.width() * 1 / 3, ALTO_BARRA_ATRAS, 
+                TFT_DARKGREY, TFT_MAROON, TFT_YELLOW, "PLAY", 1);
+        key[12].drawButton(false);
+        key[13].initButton(&tft, 
+                tft.width() * 5 / 6, 40 + (ALTO_BARRA_ATRAS + 20), 
+                tft.width() * 1 / 3, ALTO_BARRA_ATRAS, 
+                TFT_DARKGREY, TFT_MAROON, TFT_YELLOW, "SIG>", 1);
+        key[13].drawButton(false);
+        key[14].initButton(&tft, 
+                tft.width() * 5 / 6, 80 + (ALTO_BARRA_ATRAS + 20), 
+                tft.width() * 1 / 3, ALTO_BARRA_ATRAS, 
+                TFT_DARKGREY, TFT_MAROON, TFT_YELLOW, "<ANT", 1);
+        key[14].drawButton(false);
+        key[15].initButton(&tft, 
+                tft.width() * 5 / 6, 120 + (ALTO_BARRA_ATRAS + 20), 
+                tft.width() * 1 / 3, ALTO_BARRA_ATRAS, 
+                TFT_DARKGREY, TFT_MAROON, TFT_YELLOW, "STOP", 1);
+        key[15].drawButton(false);
 
         // --- TEXTO MARCADOR DE POSICIÓN ---
         tft.setTextColor(TFT_YELLOW);
         tft.setFreeFont(&FreeSansBold9pt7b); 
-        tft.drawString("CONTROL DE SONIDO - VACIO", tft.width() / 2, ALTO_BARRA_ATRAS + 50);
-        tft.drawString("Aqui ira la lista de pistas y controles.", tft.width() / 2, ALTO_BARRA_ATRAS + 80);
-        tft.setFreeFont(&FreeMonoBold18pt7b);
+        // tft.drawString("CONTROL DE SONIDO - VACIO", tft.width() / 2, ALTO_BARRA_ATRAS + 50);
+        // tft.drawString("Aqui ira la lista de pistas y controles.", tft.width() / 2, ALTO_BARRA_ATRAS + 80);
+        // tft.setFreeFont(&FreeMonoBold18pt7b);
         
         inicializada = true;
     }
@@ -458,7 +510,7 @@ void controlar_sonido() {
     TouchPoint p = ts.getTouch();
     bool touched = (p.zRaw > 0);
     
-    // Solo se chequea el botón ATRAS (key[0])
+    // Se comprueban todos los botones
     for (uint8_t b = 0; b < NUM_BOTONES_ACTIVOS; b++) { 
         const char* label = (b == 0) ? "< MENU (SONIDO)" : "";
         bool contained = key[b].contains(p.x, p.y);
@@ -475,6 +527,31 @@ void controlar_sonido() {
                 inicializada = false;
                 return;
             }
+            if (b > 0 && b <= (num_efectos)) {
+                Serial.printf("<< %i >>", b - 1); // b - 1 es el número de archivo
+                Serial.println(lista_efectos[b - 1].as<const char*>());
+                pantalla_actual = PANTALLA_SONIDO;
+                inicializada = true;
+                return;
+            }
+            if (b == 12) {
+                playing = !playing;
+                if (playing) { // estado del boton play = true
+                    key[b].drawButton(playing, "PAUSA");
+                } else { // estado de boton play = false
+                    key[b].drawButton(playing, "PLAY");
+                }
+                pantalla_actual = PANTALLA_SONIDO;
+                inicializada = true; // no necesita redibujar la pantalla
+                return;
+            }
+            if (b > 12) {
+                Serial.print("<<<<<<");
+                pantalla_actual = PANTALLA_SONIDO;
+                inicializada = false;
+                return;
+            }
+            //inicializada = false;
         }
     }
 }
@@ -493,9 +570,8 @@ void enviar_peticion_efecto() {
     // String url = "http://" + IP_ESTATICA.toString() + "/efectos";
     String url = "http://192.168.4.1/efectos";
     
-    // 3. 
+    // 3. Construcción de la url
     String fullUrl = url ;//+ payload;
-
     Serial.println(">>> Enviando petición GET a: " + url);
 
     // 4. Inicializar y Configurar la petición, se puede incluir parámetros GET
@@ -528,7 +604,7 @@ void enviar_peticion_efecto() {
             
             if (temp_char != nullptr) {
                 String elem = String(temp_char);
-                Serial.println(elem);
+                //Serial.println(elem);
             } else {
                 Serial.println("<<< Puntero nulo ...");
             }
